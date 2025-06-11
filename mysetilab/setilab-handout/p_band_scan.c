@@ -1,6 +1,10 @@
+#define _GNU_SOURCE
 #include <stdlib.h>
 #include <stdio.h>
+#include <ctype.h>
+#include <assert.h>
 #include <pthread.h>
+#include <sched.h>
 
 #include "timing.h"
 #include "filter.h"
@@ -22,8 +26,6 @@ int num_bands;
 double* lowerBand;
 double* upperBand;
 double bandwidth;
-double start;
-double* filter_coeffs;
 double* band_power;
 int wow;
 
@@ -63,7 +65,7 @@ double avgOf(double* data, int num) {
 
 void removeDC(double* data, int num) {
 
-  double dc = avg_of(data,num);
+  double dc = avgOf(data,num);
 
   printf("Removing DC component of %lf\n",dc);
 
@@ -72,11 +74,21 @@ void removeDC(double* data, int num) {
   }
 }
 
-void* analyzeBand(void* arg) {
-  // individual band to scan on one thread of the process
-  int band = arg;
+void* analyzeBand(void* myId) {
+  // individual id for this thread
+  int id = * (int*) myId;
+  double filter_coeffs[filter_order + 1];
 
-  for (int band = 0; band < num_bands; band++) {
+  cpu_set_t set;
+  CPU_ZERO(&set);
+  CPU_SET(id % numProcs, &set);
+  if (sched_setaffinity(0,sizeof(set),&set)<0) {//do it
+    perror("Can't set affinity"); //hopefully doesn't fail
+    exit(-1);
+  } //copied from pthread
+
+
+  for (int band = id; band < num_bands; band += numThreads) {
     // Make the filter
     generate_band_pass(sig->Fs,
                        band * bandwidth + 0.0001, // keep within limits
@@ -94,100 +106,22 @@ void* analyzeBand(void* arg) {
 
   }
 
-  // Pretty print results
-  double max_band_power = max_of(band_power,num_bands);
-  double avg_band_power = avg_of(band_power,num_bands);
-  int wow = 0;
-  *lowerBand = -1;
-  *upperBand = -1;
-
-
-  return;
+  pthread_exit(NULL);
 
 }
 
-int analyze_signal(signal* s, int fo, int nb, double* lb, double* ub) {
-
-  // set up globals
-  sig = s;
-  filter_order = fo;
-  num_bands = nb;
-  lowerBand = lb;
-  upperBand = ub;
-
-  start = get_seconds();
-  
-
-  /************************************************* */
-  printf("Starting %ld software threads on %ld processors (hardware threads)\n", numThreads, numProcs);
-
-  long num_started = 0;
-  for (long i = 0; i < numThreads; i++) {
-
-    int returncode = pthread_create(&(tids[i]), // thread id gets put here
-                                    NULL, // use default attributes
-                                    analyzeBand, // thread will begin in this function
-                                    (void*) i // we'll give it i as an id
-                                    );
-    if (returncode == 0) {
-      printf("Started thread %ld, tid %lu\n", i, tids[i]);
-      num_started++;
-    } else {
-      printf("Failed to start thread %ld\n", i);
-      perror("Failed to start thread");
-      tids[i] = 0xdeadbeef;
-    }
-  }
-
-  printf("Finished starting threads (%ld started)\n", num_started);
-
-  printf("Now joining\n");
-
-  for (long i = 0; i < numThreads; i++) {
-    if (tids[i] != 0xdeadbeef) {
-      printf("Joining with %ld, tid %lu\n", i, tids[i]);
-      int returncode = pthread_join(tids[i], NULL);   //
-      if (returncode != 0) {
-        printf("Failed to join with %ld!\n", i);
-        perror("join failed");
-      } else {
-        printf("Done joining with %ld\n", i);
-      }
-    } else {
-      printf("Skipping %ld (wasn't started successfully)\n", i);
-    }
-  }
-
-  printf("Done!\n");
-
-  /******************************* */
-
-  for (int band = 0; band < num_bands; band++) {
-    // Make the filter
-    generate_band_pass(sig->Fs,
-                       band * bandwidth + 0.0001, // keep within limits
-                       (band + 1) * bandwidth - 0.0001,
-                       filter_order,
-                       filter_coeffs);
-    hamming_window(filter_order,filter_coeffs);
-
-    // Convolve
-    convolve_and_compute_power(sig->num_samples,
-                               sig->data,
-                               filter_order,
-                               filter_coeffs,
-                               &(band_power[band]));
-
-  }
-
-  double end = get_seconds();
+int analyze_signal(double* lb, double* ub) {
 
   // Pretty print results
-  double max_band_power = max_of(band_power,num_bands);
-  double avg_band_power = avg_of(band_power,num_bands);
+  double max_band_power = maxOf(band_power,num_bands);
+  double avg_band_power = avgOf(band_power,num_bands);
   wow = 0;
   *lowerBand = -1;
   *upperBand = -1;
+
+  // set up globals
+  lowerBand = lb;
+  upperBand = ub;
 
   for (int band = 0; band < num_bands; band++) {
     double band_low  = band * bandwidth + 0.0001;
@@ -234,16 +168,15 @@ int main(int argc, char* argv[]) {
   char sig_type    = toupper(argv[1][0]);
   char* sig_file   = argv[2];
   double Fs        = atof(argv[3]);
-  int filter_order = atoi(argv[4]);
-  int num_bands    = atoi(argv[5]);
+  filter_order = atoi(argv[4]);
+  num_bands    = atoi(argv[5]);
   numThreads = atoi(argv[6]);
   numProcs = atoi(argv[7]);
 
   if (numThreads > num_bands) {numThreads = num_bands;}
 
-  tids = (pthread_t*)malloc(sizeof(pthread_t) * numThreads);
+  tids = (pthread_t*) malloc(sizeof(pthread_t) * numThreads);
   band_power = (double*) malloc(sizeof(double)*num_bands);
-  filter_coeffs = (double*) malloc(sizeof(double)*(filter_order + 1));
 
 
   assert(Fs > 0.0);
@@ -257,8 +190,8 @@ int main(int argc, char* argv[]) {
           Fs:         %lf Hz\n\
           order:      %d\n\
           bands:      %d\n\
-          Threads:    %d\n\
-          Processors: %d\n",
+          Threads:    %ld\n\
+          Processors: %ld\n",
          sig_type == 'T' ? "Text" : (sig_type == 'B' ? "Binary" : (sig_type == 'M' ? "Mapped Binary" : "UNKNOWN TYPE")),
          sig_file,
          Fs,
@@ -269,7 +202,6 @@ int main(int argc, char* argv[]) {
 
   printf("Load or map file\n");
 
-  signal* sig;
   switch (sig_type) {
     case 'T':
       sig = load_text_format_signal(sig_file);
@@ -298,43 +230,43 @@ int main(int argc, char* argv[]) {
   // processing before multi parallelizing
   double Fc = (sig->Fs) / 2;
   bandwidth = Fc / num_bands;
-  remove_dc(sig->data,sig->num_samples);
-  double signal_power = avg_power(sig->data,sig->num_samples);
+  removeDC(sig->data,sig->num_samples);
+  double signal_power = avgPower(sig->data,sig->num_samples);
   printf("signal average power:     %lf\n", signal_power);
-
 
   long returnCode;
   for (int i = 0; i < numThreads; i++) {
-    returnCode = pthread_create( &(tids[i]),
+    returnCode = pthread_create(&(tids[i]),
                                 NULL,
                                 analyzeBand,
-                                (void*) i);
-        if (returnCode != 0) {
-            perror("failed to start thread");
-            exit(-1);
-        }}
-
-    end = get_seconds();
-  
-    
-
-    for (i=0;i<num_threads;i++) {
-         rc=pthread_join(tid[i],NULL);   // 
-         if (rc!=0) { 
-        perror("join failed");
-        exit(-1);
-        }
+                                (void*) &i);
+    if (returnCode != 0) {
+      perror("failed to start thread");
+      exit(-1);
     }
+  }
+  
+
+  for (int i = 0; i < numThreads; i++) {
+    returnCode = pthread_join(tids[i], NULL);
+    if (returnCode != 0) { 
+      perror("join failed");
+      exit(-1);
+      }
+  }
 
   double start = 0;
   double end   = 0;
-  if (analyze_signal(sig, filter_order, num_bands, &start, &end)) {
+  if (analyze_signal(&start, &end)) {
     printf("POSSIBLE ALIENS %lf-%lf HZ (CENTER %lf HZ)\n", start, end, (end + start) / 2.0);
   } else {
     printf("no aliens\n");
   }
 
+
   free_signal(sig);
+  free(tids);
+  free(band_power);
 
   return 0;
 }
